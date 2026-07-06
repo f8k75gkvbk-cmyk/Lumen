@@ -1,0 +1,113 @@
+{
+  "name": "Lumen — Video Ingestion (Sarvam STT)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lumen-ingest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-in",
+      "name": "Video Uploaded (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "lumen-ingest"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Expects: { audio_url, language_code, video_id }\n// (Client uploads the extracted 16kHz WAV somewhere reachable, or sends a public URL.)\nconst body = $input.first().json.body || $input.first().json;\nif (!body.audio_url) {\n  throw new Error('audio_url is required');\n}\nreturn [{ json: {\n  audio_url: body.audio_url,\n  language_code: body.language_code || 'unknown',\n  video_id: body.video_id || $now.toMillis().toString()\n} }];"
+      },
+      "id": "validate",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.audio_url }}",
+        "options": { "response": { "response": { "responseFormat": "file" } } }
+      },
+      "id": "download",
+      "name": "Download Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.sarvam.ai/speech-to-text",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-subscription-key",
+              "value": "={{ $env.SARVAM_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            { "name": "model", "value": "saaras:v3" },
+            { "name": "language_code", "value": "={{ $('Validate Input').item.json.language_code }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "sarvam-stt",
+      "name": "Sarvam STT (Saaras v3)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Persist the transcript. Swap this for a Supabase/DB insert if desired.\nconst transcript = $input.first().json.transcript || '';\nconst videoId = $('Validate Input').item.json.video_id;\nreturn [{ json: { video_id: videoId, transcript, status: 'ready' } }];"
+      },
+      "id": "store",
+      "name": "Store Transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "respond",
+      "name": "Return Transcript",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    }
+  ],
+  "connections": {
+    "Video Uploaded (Webhook)": {
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+    },
+    "Validate Input": {
+      "main": [[{ "node": "Download Audio", "type": "main", "index": 0 }]]
+    },
+    "Download Audio": {
+      "main": [[{ "node": "Sarvam STT (Saaras v3)", "type": "main", "index": 0 }]]
+    },
+    "Sarvam STT (Saaras v3)": {
+      "main": [[{ "node": "Store Transcript", "type": "main", "index": 0 }]]
+    },
+    "Store Transcript": {
+      "main": [[{ "node": "Return Transcript", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}
