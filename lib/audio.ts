@@ -82,6 +82,125 @@ export async function recordMicToWav(
   return encodeWav(merged, 16000);
 }
 
+// ---- Continuous conversation engine (voice-activity detection) ----
+// Opens the mic once and keeps it open. Detects speech vs silence by RMS
+// energy. When the user finishes an utterance (a pause after speaking), it
+// fires onUtterance(wav). Call stop() to release the mic entirely.
+//
+// This is what makes the voice bot feel live: the user speaks whenever they
+// want, and each finished phrase is captured automatically — no press-and-hold.
+export interface VoiceSession {
+  stop: () => void;
+  suspend: () => void; // pause capture (e.g. while the bot is speaking)
+  resume: () => void;
+}
+
+export async function startVoiceSession(opts: {
+  onUtterance: (wav: Blob) => void;
+  onSpeechStart?: () => void;
+  onLevel?: (level: number) => void; // 0..1, for live mic meter
+  silenceMs?: number; // pause length that ends an utterance
+  minSpeechMs?: number; // ignore blips shorter than this
+}): Promise<VoiceSession> {
+  const silenceMs = opts.silenceMs ?? 800;
+  const minSpeechMs = opts.minSpeechMs ?? 350;
+  const targetRate = 16000;
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  });
+  const AudioCtx =
+    window.AudioContext || (window as any).webkitAudioContext;
+  const ctx = new AudioCtx({ sampleRate: targetRate });
+  const source = ctx.createMediaStreamSource(stream);
+  const processor = ctx.createScriptProcessor(2048, 1, 1);
+
+  let suspended = false;
+  let speaking = false;
+  let speechStartedAt = 0;
+  let lastVoiceAt = 0;
+  let buffer: Float32Array[] = [];
+
+  // Adaptive noise floor so it works in quiet and noisy rooms alike.
+  let noiseFloor = 0.01;
+
+  source.connect(processor);
+  processor.connect(ctx.destination);
+
+  processor.onaudioprocess = (e) => {
+    if (suspended) return;
+    const input = e.inputBuffer.getChannelData(0);
+
+    // RMS energy of this frame.
+    let sum = 0;
+    for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+    const rms = Math.sqrt(sum / input.length);
+    opts.onLevel?.(Math.min(1, rms * 8));
+
+    // Slowly track the ambient noise floor when not speaking.
+    if (!speaking) noiseFloor = noiseFloor * 0.95 + rms * 0.05;
+    const threshold = Math.max(0.015, noiseFloor * 2.2);
+    const now = performance.now();
+
+    if (rms > threshold) {
+      if (!speaking) {
+        speaking = true;
+        speechStartedAt = now;
+        buffer = [];
+        opts.onSpeechStart?.();
+      }
+      lastVoiceAt = now;
+      buffer.push(new Float32Array(input));
+    } else if (speaking) {
+      // Still within an utterance — keep a little trailing audio.
+      buffer.push(new Float32Array(input));
+      if (now - lastVoiceAt > silenceMs) {
+        // Utterance ended.
+        speaking = false;
+        const duration = lastVoiceAt - speechStartedAt;
+        if (duration >= minSpeechMs) {
+          const merged = mergeChunks(buffer);
+          opts.onUtterance(encodeWav(merged, targetRate));
+        }
+        buffer = [];
+      }
+    }
+  };
+
+  return {
+    stop: () => {
+      suspended = true;
+      processor.disconnect();
+      source.disconnect();
+      stream.getTracks().forEach((t) => t.stop());
+      ctx.close();
+    },
+    suspend: () => {
+      suspended = true;
+      speaking = false;
+      buffer = [];
+    },
+    resume: () => {
+      suspended = false;
+    },
+  };
+}
+
+function mergeChunks(chunks: Float32Array[]): Float32Array {
+  const total = chunks.reduce((n, a) => n + a.length, 0);
+  const merged = new Float32Array(total);
+  let offset = 0;
+  for (const a of chunks) {
+    merged.set(a, offset);
+    offset += a.length;
+  }
+  return merged;
+}
+
 // Encode Float32 PCM into a 16-bit WAV blob.
 function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2);

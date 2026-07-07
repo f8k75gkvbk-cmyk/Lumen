@@ -35,11 +35,15 @@ export async function sarvamSTT(
 }
 
 // ---- Text to Speech (Bulbul v3) ----
-// Returns a base64 WAV string. Sarvam TTS caps input at ~2500 chars.
+// Returns a base64 WAV string. Bulbul v3 accepts up to 2500 chars per request.
+// NOTE: v3 has its own speaker catalog — v2 names like "anushka" are invalid
+// on v3 and will error. Default here is "priya", a warm neutral female voice
+// that suits a patient tutor. Swap for any v3 speaker (shubh, aditya, ritu,
+// neha, kavya, etc.).
 export async function sarvamTTS(
   text: string,
   targetLanguageCode: string = "en-IN",
-  speaker: string = "anushka"
+  speaker: string = "priya"
 ): Promise<string> {
   const res = await fetch(`${SARVAM_BASE}/text-to-speech`, {
     method: "POST",
@@ -48,10 +52,14 @@ export async function sarvamTTS(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      text: text.slice(0, 2400),
+      text: text.slice(0, 2500),
       target_language_code: targetLanguageCode,
       model: "bulbul:v3",
       speaker,
+      pace: 1.0, // natural teaching pace
+      temperature: 0.5, // slightly steadier than default 0.6 for clarity
+      speech_sample_rate: 24000, // v3 default, high quality
+      enable_preprocessing: true, // clean handling of numbers / Hinglish
     }),
   });
 
@@ -79,10 +87,14 @@ export async function sarvamChat(messages: ChatMessage[]): Promise<string> {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "sarvam-m",
+      model: "sarvam-30b", // sarvam-m is deprecated; 30b is the real-time chat model
       messages,
       temperature: 0.2, // low temp = stays grounded, less improvisation
-      max_tokens: 800,
+      // Thinking mode is ON by default on sarvam-30b/105b and would eat the
+      // token budget, returning empty content. Disable it for fast, direct
+      // tutor replies.
+      reasoning_effort: null,
+      max_tokens: 1024,
     }),
   });
 
@@ -91,7 +103,9 @@ export async function sarvamChat(messages: ChatMessage[]): Promise<string> {
     throw new Error(`Sarvam chat failed (${res.status}): ${body}`);
   }
   const data = await res.json();
-  return data.choices?.[0]?.message?.content?.trim() ?? "";
+  const msg = data.choices?.[0]?.message;
+  // Fallback: if content is empty but reasoning leaked, use that.
+  return (msg?.content || msg?.reasoning_content || "").trim();
 }
 
 // ---- The grounding prompt: the heart of the anti-hallucination guarantee ----

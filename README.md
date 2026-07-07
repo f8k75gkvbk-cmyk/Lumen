@@ -75,3 +75,26 @@ n8n, activate the workflow, and POST `{ "audio_url": "...", "language_code":
   long answers, split into sentences and call TTS per sentence.
 - Voice input records up to 20s per question (adjustable in `lib/audio.ts`).
 - Browser mic + autoplay require HTTPS — works on Vercel, and on `localhost`.
+
+## What changed in v2
+
+- **Model fix:** `sarvam-m` is deprecated → now uses `sarvam-30b` with thinking
+  mode disabled (`reasoning_effort: null`) so replies aren't swallowed by
+  reasoning tokens.
+- **Transcript upload:** besides video/audio, you can now drop a `.txt`, `.md`,
+  or `.docx` transcript and skip transcription entirely (`/api/parse-transcript`).
+- **Seamless voice:** press *Start conversation* once, then just talk. Browser
+  voice-activity detection auto-detects when you finish a sentence, processes it,
+  the tutor replies, and the mic re-opens automatically. Supports barge-in
+  (start talking to interrupt the tutor).
+- **Better voice:** `bulbul:v3` with a valid v3 speaker (`priya`), 24kHz, and
+  preprocessing on for clean numbers/Hinglish. (The old `anushka` default was a
+  v2-only speaker and would fail on v3.)
+- **UI:** upload and tutor panels are now equal height.
+- **Sarvam MCP:** see `SARVAM_MCP.md` for the developer-time MCP setup.
+
+## Redeploy
+
+Vercel auto-deploys on push to the default branch. After this push, confirm your
+`SARVAM_API_KEY` env var is set in Vercel → Settings → Environment Variables, and
+the new deploy will pick up all changes.

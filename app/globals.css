@@ -163,10 +163,10 @@ textarea {
 /* ---------- Two-panel grid ---------- */
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1.15fr;
+  grid-template-columns: 1fr 1.1fr;
   gap: 24px;
   padding-bottom: 80px;
-  align-items: start;
+  align-items: stretch; /* both panels share the tallest height */
 }
 @media (max-width: 940px) {
   .grid {
@@ -180,6 +180,8 @@ textarea {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .panel-head {
   padding: 20px 24px;
@@ -208,6 +210,31 @@ textarea {
 }
 .panel-body {
   padding: 24px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Grounding hint fills the empty space in the upload panel so both
+   columns stay balanced before a transcript exists. */
+.hint-box {
+  margin-top: auto;
+  background: rgba(62, 224, 200, 0.04);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--chalk-dim);
+}
+.hint-box span {
+  display: block;
+  font-family: var(--display);
+  font-size: 11px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--teal);
+  margin-bottom: 7px;
 }
 
 /* ---------- Upload zone ---------- */
@@ -340,7 +367,6 @@ textarea {
 
 .locked {
   text-align: center;
-  padding: 50px 20px;
   color: var(--chalk-dim);
 }
 .locked svg {
@@ -357,8 +383,9 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  min-height: 260px;
-  max-height: 420px;
+  flex: 1;
+  min-height: 300px;
+  max-height: 460px;
   overflow-y: auto;
   padding-right: 6px;
 }
@@ -467,7 +494,16 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
+  flex: 1;
   padding: 14px 0 6px;
+}
+.locked {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 .orb {
   position: relative;

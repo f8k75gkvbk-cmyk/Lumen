@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fileToWavChunks, recordMicToWav, base64WavToUrl } from "@/lib/audio";
+import {
+  fileToWavChunks,
+  startVoiceSession,
+  base64WavToUrl,
+  type VoiceSession,
+} from "@/lib/audio";
 
 type Lang = "en" | "hi";
 type Msg = { role: "user" | "assistant"; content: string; refusal?: boolean };
@@ -55,10 +60,10 @@ export default function Home() {
           Turn any lesson video into a <em>tutor you can talk to.</em>
         </h2>
         <p>
-          Upload an educational video. Lumen transcribes it, then answers your
-          questions by voice or chat — strictly from what the video teaches. Ask
-          something it never covered, and it&rsquo;ll tell you so instead of
-          making things up.
+          Upload an educational video &mdash; or its transcript &mdash; and
+          Lumen answers your questions by voice or chat, strictly from what the
+          lesson teaches. Ask something it never covered, and it&rsquo;ll tell
+          you so instead of making things up.
         </p>
       </section>
 
@@ -87,7 +92,7 @@ export default function Home() {
           </a>{" "}
           · Speech, language &amp; voice by Sarvam AI
         </span>
-        <span>Answers are limited to the uploaded video&rsquo;s content.</span>
+        <span>Answers are limited to the uploaded lesson&rsquo;s content.</span>
       </footer>
     </div>
   );
@@ -109,11 +114,13 @@ function UploadPanel(props: any) {
     setError,
   } = props;
 
+  const [source, setSource] = useState<"media" | "doc">("media");
   const [hot, setHot] = useState(false);
   const [fileName, setFileName] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const mediaRef = useRef<HTMLInputElement>(null);
+  const docRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = useCallback(
+  const handleMedia = useCallback(
     async (file: File) => {
       setError("");
       setTranscript("");
@@ -121,7 +128,6 @@ function UploadPanel(props: any) {
       setIngesting(true);
       setProgress(0);
       setProgressLabel("Extracting audio…");
-
       try {
         const chunks = await fileToWavChunks(file);
         const parts: string[] = [];
@@ -153,14 +159,58 @@ function UploadPanel(props: any) {
     [lang, setError, setIngesting, setProgress, setProgressLabel, setTranscript]
   );
 
+  const handleDoc = useCallback(
+    async (file: File) => {
+      setError("");
+      setTranscript("");
+      setFileName(file.name);
+      setIngesting(true);
+      setProgress(0);
+      setProgressLabel("Reading document…");
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const res = await fetch("/api/parse-transcript", {
+          method: "POST",
+          body: form,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Couldn't read that file");
+        setTranscript(data.text);
+        setProgress(100);
+        setProgressLabel("Done");
+      } catch (e: any) {
+        setError(e.message);
+      } finally {
+        setIngesting(false);
+      }
+    },
+    [setError, setIngesting, setProgress, setProgressLabel, setTranscript]
+  );
+
   return (
     <div className="panel">
       <div className="panel-head">
         <span className="num">01</span>
-        <h3>Upload the lesson</h3>
-        <p>MP4 · MOV · MP3 · WAV</p>
+        <h3>Add the lesson</h3>
+        <p>{source === "media" ? "MP4 · MOV · MP3 · WAV" : "TXT · MD · DOCX"}</p>
       </div>
       <div className="panel-body">
+        <div className="tabs" role="tablist">
+          <button
+            className={source === "media" ? "on" : ""}
+            onClick={() => setSource("media")}
+          >
+            <FilmIcon /> Video / audio
+          </button>
+          <button
+            className={source === "doc" ? "on" : ""}
+            onClick={() => setSource("doc")}
+          >
+            <DocIcon /> Transcript file
+          </button>
+        </div>
+
         <div
           className={`drop ${hot ? "hot" : ""}`}
           onDragOver={(e) => {
@@ -172,43 +222,80 @@ function UploadPanel(props: any) {
             e.preventDefault();
             setHot(false);
             const f = e.dataTransfer.files?.[0];
-            if (f) handleFile(f);
+            if (f) (source === "media" ? handleMedia : handleDoc)(f);
           }}
         >
-          <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M12 15V3m0 0L8 7m4-4 4 4"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M20 17v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
-          <b>Drop your video or audio here</b>
-          <small>or pick a file — we&rsquo;ll pull out the audio and read it</small>
+          {source === "media" ? (
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 15V3m0 0L8 7m4-4 4 4"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M20 17v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          ) : (
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-5Z"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M8 13h8M8 17h8"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
+          )}
+          <b>
+            {source === "media"
+              ? "Drop your video or audio here"
+              : "Drop your transcript file here"}
+          </b>
+          <small>
+            {source === "media"
+              ? "we\u2019ll pull out the audio and read it aloud"
+              : "already have the text? skip transcription entirely"}
+          </small>
           <div style={{ marginTop: 18 }}>
             <button
               className="btn"
               disabled={ingesting}
-              onClick={() => inputRef.current?.click()}
+              onClick={() =>
+                (source === "media" ? mediaRef : docRef).current?.click()
+              }
             >
               {ingesting ? "Working…" : "Choose file"}
             </button>
           </div>
           <input
-            ref={inputRef}
+            ref={mediaRef}
             type="file"
             accept="video/*,audio/*"
             hidden
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) handleFile(f);
+              if (f) handleMedia(f);
+            }}
+          />
+          <input
+            ref={docRef}
+            type="file"
+            accept=".txt,.md,.text,.docx"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleDoc(f);
             }}
           />
         </div>
@@ -227,7 +314,7 @@ function UploadPanel(props: any) {
 
         {error && <div className="err">{error}</div>}
 
-        {transcript && (
+        {transcript ? (
           <div className="transcript-box">
             {!ingesting && (
               <span className="done-tag">
@@ -245,6 +332,15 @@ function UploadPanel(props: any) {
             )}
             {transcript}
           </div>
+        ) : (
+          !ingesting && (
+            <div className="hint-box">
+              <span>How grounding works</span>
+              Whatever you add here becomes the tutor&rsquo;s entire world. It
+              won&rsquo;t pull in outside facts &mdash; if the answer isn&rsquo;t
+              in this text, it says so.
+            </div>
+          )
         )}
       </div>
     </div>
@@ -268,7 +364,7 @@ function TutorPanel({
       <div className="panel-head">
         <span className="num">02</span>
         <h3>Ask your tutor</h3>
-        <p>{ready ? "Ready" : "Waiting for a video"}</p>
+        <p>{ready ? "Ready" : "Waiting for a lesson"}</p>
       </div>
       <div className="panel-body">
         <div className="tabs" role="tablist">
@@ -305,7 +401,7 @@ function TutorPanel({
               />
             </svg>
             <p>
-              <b>Upload a video first.</b>
+              <b>Add a lesson first.</b>
               <br />
               Your tutor unlocks the moment the transcript is ready.
             </p>
@@ -374,8 +470,8 @@ function ChatMode({ lang, transcript }: { lang: Lang; transcript: string }) {
           <div className="bubble bot">
             <div className="who">Tutor</div>
             {lang === "hi"
-              ? "नमस्ते! मैंने वीडियो देख लिया है। इसके बारे में कुछ भी पूछें।"
-              : "Hi! I've studied the video. Ask me anything about what it covered."}
+              ? "नमस्ते! मैंने पाठ पढ़ लिया है। इसके बारे में कुछ भी पूछें।"
+              : "Hi! I've studied the lesson. Ask me anything it covered."}
           </div>
         )}
         {msgs.map((m, i) => (
@@ -429,83 +525,160 @@ function ChatMode({ lang, transcript }: { lang: Lang; transcript: string }) {
   );
 }
 
-/* ---- Voice ---- */
+/* ---- Voice (seamless, always-listening conversation) ---- */
+type VoiceState = "off" | "listening" | "thinking" | "speaking";
+
 function VoiceMode({ lang, transcript }: { lang: Lang; transcript: string }) {
-  const [state, setState] = useState<
-    "idle" | "listening" | "thinking" | "speaking"
-  >("idle");
+  const [state, setState] = useState<VoiceState>("off");
   const [heard, setHeard] = useState("");
   const [answer, setAnswer] = useState("");
   const [litCount, setLitCount] = useState(0);
   const [refusal, setRefusal] = useState(false);
   const [error, setError] = useState("");
-  const stopRef = useRef({ stopped: false });
+  const [level, setLevel] = useState(0);
+
+  const sessionRef = useRef<VoiceSession | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const historyRef = useRef<Msg[]>([]);
+  const busyRef = useRef(false);
+  const stateRef = useRef<VoiceState>("off");
+  const langRef = useRef(lang);
+  langRef.current = lang;
 
-  const words = answer ? answer.split(/\s+/) : [];
+  const setSt = (s: VoiceState) => {
+    stateRef.current = s;
+    setState(s);
+  };
 
-  async function startListening() {
+  useEffect(() => {
+    return () => endSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function startSession() {
     setError("");
-    setAnswer("");
     setHeard("");
+    setAnswer("");
+    setLitCount(0);
+    try {
+      const session = await startVoiceSession({
+        onLevel: (l) => setLevel(l),
+        onSpeechStart: () => {
+          if (stateRef.current === "speaking" && audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current = null;
+            setSt("listening");
+          }
+        },
+        onUtterance: (wav) => handleUtterance(wav),
+      });
+      sessionRef.current = session;
+      setSt("listening");
+    } catch (e: any) {
+      setError(
+        e.message ||
+          "I couldn't reach your microphone. Check the browser permission."
+      );
+      setSt("off");
+    }
+  }
+
+  function endSession() {
+    sessionRef.current?.stop();
+    sessionRef.current = null;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    busyRef.current = false;
+    setSt("off");
+    setLevel(0);
+  }
+
+  async function handleUtterance(wav: Blob) {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    sessionRef.current?.suspend();
+    setSt("thinking");
+    setAnswer("");
     setLitCount(0);
     setRefusal(false);
-    stopRef.current = { stopped: false };
-    setState("listening");
-    try {
-      const wav = await recordMicToWav(stopRef.current);
-      setState("thinking");
 
-      // 1) STT
+    try {
+      const l = langRef.current;
       const sttForm = new FormData();
       sttForm.append("audio", wav, "q.wav");
-      sttForm.append("language", lang === "hi" ? "hi-IN" : "en-IN");
+      sttForm.append("language", l === "hi" ? "hi-IN" : "en-IN");
       const sttRes = await fetch("/api/stt", { method: "POST", body: sttForm });
       const sttData = await sttRes.json();
       if (!sttRes.ok) throw new Error(sttData.error || "Couldn't hear that");
       const question = (sttData.text || "").trim();
-      setHeard(question);
       if (!question) {
-        setState("idle");
-        setError(
-          lang === "hi"
-            ? "मुझे कुछ सुनाई नहीं दिया। फिर से कोशिश करें।"
-            : "I didn't catch that. Try again."
-        );
+        resumeListening();
         return;
       }
+      setHeard(question);
 
-      // 2) LLM (grounded)
       const chatRes = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript, question, language: lang }),
+        body: JSON.stringify({
+          transcript,
+          question,
+          language: l,
+          history: historyRef.current.map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+        }),
       });
       const chatData = await chatRes.json();
       if (!chatRes.ok) throw new Error(chatData.error || "Tutor error");
       const reply = chatData.answer as string;
+      historyRef.current = [
+        ...historyRef.current,
+        { role: "user" as const, content: question },
+        { role: "assistant" as const, content: reply },
+      ].slice(-8);
       setAnswer(reply);
       setRefusal(isRefusal(reply));
 
-      // 3) TTS
       const ttsRes = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: reply, language: lang }),
+        body: JSON.stringify({ text: reply, language: l }),
       });
       const ttsData = await ttsRes.json();
       if (!ttsRes.ok) throw new Error(ttsData.error || "Voice error");
 
-      // 4) Speak + karaoke captions
-      const url = base64WavToUrl(ttsData.audio);
+      await speak(ttsData.audio, reply);
+      resumeListening();
+    } catch (e: any) {
+      setError(e.message);
+      resumeListening();
+    }
+  }
+
+  function resumeListening() {
+    busyRef.current = false;
+    if (sessionRef.current) {
+      sessionRef.current.resume();
+      setSt("listening");
+    } else {
+      setSt("off");
+    }
+  }
+
+  function speak(audioBase64: string, text: string): Promise<void> {
+    return new Promise((resolve) => {
+      const url = base64WavToUrl(audioBase64);
       const audio = new Audio(url);
       audioRef.current = audio;
-      setState("speaking");
+      setSt("speaking");
+      const totalWords = text.split(/\s+/).length;
 
-      const totalWords = reply.split(/\s+/).length;
-      audio.onloadedmetadata = () => {
-        const dur = isFinite(audio.duration) ? audio.duration : totalWords / 2.6;
-        const perWord = (dur * 1000) / totalWords;
+      const begin = (durSec: number) => {
+        const perWord = (durSec * 1000) / totalWords;
         let i = 0;
         const timer = setInterval(() => {
           i++;
@@ -515,35 +688,28 @@ function VoiceMode({ lang, transcript }: { lang: Lang; transcript: string }) {
         audio.onended = () => {
           clearInterval(timer);
           setLitCount(totalWords);
-          setState("idle");
           URL.revokeObjectURL(url);
+          resolve();
         };
       };
+
+      audio.onloadedmetadata = () => {
+        const dur = isFinite(audio.duration) ? audio.duration : totalWords / 2.6;
+        begin(dur);
+      };
       audio.play().catch(() => {
-        // Autoplay blocked — reveal all words at once.
         setLitCount(totalWords);
-        setState("idle");
+        resolve();
       });
-    } catch (e: any) {
-      setError(e.message);
-      setState("idle");
-    }
+    });
   }
 
-  function stopSpeaking() {
-    stopRef.current.stopped = true;
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    setState("idle");
-  }
-
+  const words = answer ? answer.split(/\s+/) : [];
   const statusLabel =
     state === "listening"
       ? lang === "hi"
-        ? "सुन रहा हूँ…"
-        : "Listening…"
+        ? "सुन रहा हूँ… बस बोलें"
+        : "Listening… just speak"
       : state === "thinking"
       ? lang === "hi"
         ? "सोच रहा हूँ…"
@@ -553,8 +719,8 @@ function VoiceMode({ lang, transcript }: { lang: Lang; transcript: string }) {
         ? "बोल रहा हूँ"
         : "Speaking"
       : lang === "hi"
-      ? "पूछने के लिए तैयार"
-      : "Ready when you are";
+      ? "बातचीत शुरू करें"
+      : "Start the conversation";
 
   return (
     <div className="voice">
@@ -570,7 +736,14 @@ function VoiceMode({ lang, transcript }: { lang: Lang; transcript: string }) {
         <span className="ring r1" />
         <span className="ring r2" />
         <span className="ring r3" />
-        <div className="core">
+        <div
+          className="core"
+          style={
+            state === "listening"
+              ? { transform: `scale(${1 + level * 0.14})` }
+              : undefined
+          }
+        >
           {state === "listening" ? (
             <MicIcon big />
           ) : (
@@ -599,30 +772,26 @@ function VoiceMode({ lang, transcript }: { lang: Lang; transcript: string }) {
           <span className="heard">“{heard}”</span>
         ) : (
           <span className="heard">
-            {lang === "hi"
-              ? "माइक दबाएँ और वीडियो के बारे में पूछें।"
-              : "Tap the mic and ask about the video."}
+            {state === "off"
+              ? lang === "hi"
+                ? "नीचे बटन दबाएँ, फिर सामान्य रूप से बात करें।"
+                : "Tap start, then talk naturally — no need to hold anything."
+              : lang === "hi"
+              ? "वीडियो के बारे में कुछ पूछें।"
+              : "Ask anything about the lesson."}
           </span>
         )}
       </div>
 
       {error && <div className="err">{error}</div>}
 
-      {state === "listening" ? (
-        <button className="mic-btn rec" onClick={() => (stopRef.current.stopped = true)}>
-          <StopIcon /> {lang === "hi" ? "पूछ लिया" : "Done asking"}
-        </button>
-      ) : state === "speaking" ? (
-        <button className="mic-btn" onClick={stopSpeaking}>
-          <StopIcon /> {lang === "hi" ? "रोकें" : "Stop"}
+      {state === "off" ? (
+        <button className="mic-btn" onClick={startSession}>
+          <MicIcon /> {lang === "hi" ? "बातचीत शुरू करें" : "Start conversation"}
         </button>
       ) : (
-        <button
-          className="mic-btn"
-          onClick={startListening}
-          disabled={state === "thinking"}
-        >
-          <MicIcon /> {lang === "hi" ? "बोलकर पूछें" : "Hold to ask"}
+        <button className="mic-btn rec" onClick={endSession}>
+          <StopIcon /> {lang === "hi" ? "समाप्त करें" : "End conversation"}
         </button>
       )}
     </div>
@@ -660,6 +829,38 @@ function MicIcon({ big }: { big?: boolean }) {
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function FilmIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+      <rect
+        x="3"
+        y="4"
+        width="18"
+        height="16"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.7"
+      />
+      <path
+        d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+function DocIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+      <path
+        d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-5Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
       />
     </svg>
   );
