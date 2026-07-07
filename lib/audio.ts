@@ -84,11 +84,17 @@ export async function recordMicToWav(
 
 // ---- Continuous conversation engine (voice-activity detection) ----
 // Opens the mic once and keeps it open. Detects speech vs silence by RMS
-// energy. When the user finishes an utterance (a pause after speaking), it
-// fires onUtterance(wav). Call stop() to release the mic entirely.
+// energy. When the user finishes an utterance (a real pause after speaking),
+// it fires onUtterance(wav). Call stop() to release the mic entirely.
 //
-// This is what makes the voice bot feel live: the user speaks whenever they
-// want, and each finished phrase is captured automatically — no press-and-hold.
+// Tuning goals (so it never cuts the user off mid-question):
+//  - A generous silence window (default 1500ms) so natural thinking pauses
+//    inside a sentence don't end the turn.
+//  - A "hangover": several consecutive silent frames are required before we
+//    decide speech ended, so one quiet frame between words never counts.
+//  - A minimum utterance floor so brief lip-smacks/coughs are ignored.
+//  - Pre-roll: we keep a little audio from just BEFORE speech was detected, so
+//    the first word isn't clipped.
 export interface VoiceSession {
   stop: () => void;
   suspend: () => void; // pause capture (e.g. while the bot is speaking)
@@ -102,8 +108,9 @@ export async function startVoiceSession(opts: {
   silenceMs?: number; // pause length that ends an utterance
   minSpeechMs?: number; // ignore blips shorter than this
 }): Promise<VoiceSession> {
-  const silenceMs = opts.silenceMs ?? 800;
-  const minSpeechMs = opts.minSpeechMs ?? 350;
+  // Longer default silence so the bot waits for the user to actually finish.
+  const silenceMs = opts.silenceMs ?? 1500;
+  const minSpeechMs = opts.minSpeechMs ?? 400;
   const targetRate = 16000;
 
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -119,14 +126,23 @@ export async function startVoiceSession(opts: {
   const source = ctx.createMediaStreamSource(stream);
   const processor = ctx.createScriptProcessor(2048, 1, 1);
 
+  const frameMs = (2048 / targetRate) * 1000; // ~128ms per frame
+
   let suspended = false;
   let speaking = false;
   let speechStartedAt = 0;
   let lastVoiceAt = 0;
+  let silentRun = 0; // consecutive silent frames (the "hangover" counter)
   let buffer: Float32Array[] = [];
+  let preRoll: Float32Array[] = []; // audio just before speech starts
+
+  // How many consecutive silent frames must pass before we end the turn.
+  const silentFramesNeeded = Math.max(3, Math.round(silenceMs / frameMs));
+  // Keep ~300ms of pre-roll so the first syllable isn't clipped.
+  const preRollFrames = Math.max(2, Math.round(300 / frameMs));
 
   // Adaptive noise floor so it works in quiet and noisy rooms alike.
-  let noiseFloor = 0.01;
+  let noiseFloor = 0.008;
 
   source.connect(processor);
   processor.connect(ctx.destination);
@@ -141,34 +157,65 @@ export async function startVoiceSession(opts: {
     const rms = Math.sqrt(sum / input.length);
     opts.onLevel?.(Math.min(1, rms * 8));
 
-    // Slowly track the ambient noise floor when not speaking.
-    if (!speaking) noiseFloor = noiseFloor * 0.95 + rms * 0.05;
-    const threshold = Math.max(0.015, noiseFloor * 2.2);
+    // Track ambient noise only while NOT speaking, and only on genuinely quiet
+    // frames, so a loud talker doesn't drag the floor up.
+    if (!speaking && rms < noiseFloor * 3) {
+      noiseFloor = noiseFloor * 0.97 + rms * 0.03;
+    }
+
+    // Two thresholds (hysteresis): a higher bar to START speech, a lower bar to
+    // KEEP it going. This stops quiet syllables mid-word from being read as
+    // silence, which was the main cause of early cut-offs.
+    const startThreshold = Math.max(0.02, noiseFloor * 3.0);
+    const keepThreshold = Math.max(0.012, noiseFloor * 1.8);
     const now = performance.now();
 
-    if (rms > threshold) {
-      if (!speaking) {
+    if (!speaking) {
+      // Maintain a rolling pre-roll of recent quiet audio.
+      preRoll.push(new Float32Array(input));
+      if (preRoll.length > preRollFrames) preRoll.shift();
+
+      if (rms > startThreshold) {
         speaking = true;
         speechStartedAt = now;
-        buffer = [];
+        lastVoiceAt = now;
+        silentRun = 0;
+        buffer = preRoll.slice(); // include the pre-roll so word 1 is intact
+        preRoll = [];
         opts.onSpeechStart?.();
       }
-      lastVoiceAt = now;
+    } else {
+      // We're inside an utterance — always capture audio.
       buffer.push(new Float32Array(input));
-    } else if (speaking) {
-      // Still within an utterance — keep a little trailing audio.
-      buffer.push(new Float32Array(input));
-      if (now - lastVoiceAt > silenceMs) {
-        // Utterance ended.
-        speaking = false;
-        const duration = lastVoiceAt - speechStartedAt;
-        if (duration >= minSpeechMs) {
-          const merged = mergeChunks(buffer);
-          opts.onUtterance(encodeWav(merged, targetRate));
+
+      if (rms > keepThreshold) {
+        // Still talking.
+        lastVoiceAt = now;
+        silentRun = 0;
+      } else {
+        // A quiet frame. Only end the turn after enough of them in a row AND
+        // enough wall-clock silence has passed.
+        silentRun++;
+        const longEnough = now - lastVoiceAt >= silenceMs;
+        if (silentRun >= silentFramesNeeded && longEnough) {
+          speaking = false;
+          silentRun = 0;
+          const duration = lastVoiceAt - speechStartedAt;
+          if (duration >= minSpeechMs) {
+            const merged = mergeChunks(buffer);
+            opts.onUtterance(encodeWav(merged, targetRate));
+          }
+          buffer = [];
         }
-        buffer = [];
       }
     }
+  };
+
+  const reset = () => {
+    speaking = false;
+    silentRun = 0;
+    buffer = [];
+    preRoll = [];
   };
 
   return {
@@ -181,10 +228,10 @@ export async function startVoiceSession(opts: {
     },
     suspend: () => {
       suspended = true;
-      speaking = false;
-      buffer = [];
+      reset();
     },
     resume: () => {
+      reset();
       suspended = false;
     },
   };
