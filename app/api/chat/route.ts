@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sarvamChat, buildTutorSystemPrompt, ChatMessage } from "@/lib/sarvam";
+import { sarvamChat, buildTutorMessages, ChatMessage } from "@/lib/sarvam";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -16,12 +16,14 @@ export async function POST(req: NextRequest) {
     }
 
     const lang: "en" | "hi" = language === "hi" ? "hi" : "en";
+    const priorHistory: ChatMessage[] = Array.isArray(history) ? history : [];
 
-    const messages: ChatMessage[] = [
-      { role: "system", content: buildTutorSystemPrompt(transcript, lang) },
-      ...(Array.isArray(history) ? history : []).slice(-8),
-      { role: "user", content: question },
-    ];
+    const messages = buildTutorMessages(
+      transcript,
+      lang,
+      priorHistory,
+      question
+    );
 
     const answer = await sarvamChat(messages);
     return NextResponse.json({ answer });
