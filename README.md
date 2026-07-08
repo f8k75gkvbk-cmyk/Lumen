@@ -47,7 +47,7 @@ cp .env.example .env.local     # add your SARVAM_API_KEY
 npm run dev                    # http://localhost:3000
 ```
 
-## Deploy to Vercel + kushg.online
+## Deploy to Vercel
 
 1. **Push to GitHub** (see the git commands at the end).
 2. Go to [vercel.com/new](https://vercel.com/new) → **Import** your repo.
@@ -55,11 +55,6 @@ npm run dev                    # http://localhost:3000
 4. Under **Environment Variables**, add:
    - `SARVAM_API_KEY` = your key
 5. Click **Deploy**.
-6. After the first deploy: **Project → Settings → Domains → Add** `www.kushg.online`.
-   Vercel shows a CNAME (usually `cname.vercel-dns.com`). Add that CNAME record
-   at your domain registrar for the `www` host. Add `kushg.online` too and set
-   the redirect to `www` (or vice-versa).
-7. DNS propagates in a few minutes; Vercel issues the SSL cert automatically.
 
 ## Importing the n8n workflow
 
